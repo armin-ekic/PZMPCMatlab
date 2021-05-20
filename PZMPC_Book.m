@@ -1,4 +1,9 @@
-%C = 5; %It looks like C = Hu given the equations in the paper
+%This is the script that is modeled after the book. It is similar to my own
+    %implementation, but everything is done in one file, and the plant and
+    %model are implemented as transfer functions with numerators and
+    %denominators handled accordingly. I skip this process in my own
+    %implementation.
+
 Utdi = 47.2; %This is given as the mean for adults in a cited paper (in silico subjexts of the University of Padova/Virginia FDA - 23)
 
 setPoint = zeros(297,1);
@@ -20,7 +25,8 @@ A = [2.91, -2.822625, 0.9126005; 1, 0, 0; 0, 1, 0];
 B = [-3.969/Utdi; 0; 0];
 C = [0, 0, 1];
 D = 0;
-P = [1; 2; 3; 4; 5]; %Matrix for our coincidence points, not sure if correct
+P = round(0.8*Tref/Ts); %Matrix for our coincidence points, not sure if correct
+M = 1; %Default control horizon is set to 1
 
 %nump = [-3.969*Utdi 0 0 0];
 %denp = [-0.9126005 -2.822625 2.91 1];
@@ -33,43 +39,96 @@ plant = tf(plant); %Define the transfer function for the plant
 nump = get(plant,'num'); nump = nump{:}; %Numerator of the plant
 denp = get(plant,'den'); denp = denp{:}; %Denominator of the plant
 
-numm = get(plant,'num'); numm = numm{:}; %Numerator of the model (model = plant in this case)
-denm = get(plant,'den'); denm = denm{:}; %Denominator of the model (model = plant in this case)
+nnump = length(nump)-1; %Degree of the plant numerator
+ndenp = length(denp)-1; %Degree of the plant denominator
 
+model = plant;
+model = tf(model);
+
+numm = get(model,'num'); numm = numm{:}; %Numerator of the model (model = plant in this case)
+denm = get(model,'den'); denm = denm{:}; %Denominator of the model (model = plant in this case)
+
+nnumm = length(numm)-1; %Degree of model numerator
+ndenm = length(denm)-1; %Degree of model denominator
+
+nump = [zeros(1,ndenp-nnump-1),nump];
+numm = [zeros(1,ndenm-nnumm-1),numm];
 
 plant = ss(A,B,C,D);
 plant = c2d(plant,Ts);
 model = plant;
 stepResp = step(model,[0:Ts:max(P)*Ts]);
 
-pastU = [0; 0; 0]; %Assuming initial conditions
-pastYf = [180; 180; 170]; %Randomly chosen values for blood glucose outside of the desired zone during the day, used for the free response
-pastYm = [180; 180; 170]; %Initially set to plant, not sure what to set this as right away (may need to do some luenbereger observer state estimation for this)??? These are the ACTUAL outputs given the predicted inputs applied
-deltaU = zeros(5,1); %Will hold the values for the predictions, only get values over the control horizon
-theta = zeros(5, 5); %Declaration of the theta matrix (I'm not sure if these dimentions are correct)
-Yf = zeros(5, 1); %Declaration of the free response matrix
-uuk = zeros(288,1);
+theta = zeros(length(P), M); %Declaration of the theta matrix (I'm not sure if these dimentions are correct)
+
+errfac = exp(-P*Ts/Tref); %Not sure if I'll need this, but used to find the reference trajectory
 
 for i = 1:length(P)
-    theta(i,:) = [stepResp(P(i):-1:max(P(i)-6,1))',zeros(1,5-P(i))];
+    theta(i,:) = [stepResp(P(i):-1:max(P(i)-M+1,1))',zeros(1,M-P(i))];
 end
 S = stepResp(P)
 
-for k = 1:288
-    reftraj = refTraj(setPoint(k:k+4),Ts,Tref,pastYm(1,1),k);
+tend = 10*Tref; %Duration of the simulation
+nsteps = floor(tend/Ts);
+tvec = (0:nsteps-1)'*Ts;
+
+setPoint = ones(nsteps+max(P), 1)*110; %To simplify, we assume it's always day time
+
+uu = zeros(nsteps,1); %Initial input
+yp = zeros(nsteps,1); %Initial plant output
+ym = zeros(nsteps,1); %Initial model output
+
+umpast = zeros(ndenm,1); %Initial past inputs for model
+uppast = zeros(ndenp,1); %Initial past inputs for plant
+ympast = zeros(ndenm,1); %Initial past outputs for model
+yppast = zeros(ndenp,1); %Initial past outputs for plant
+
+
+%%%%%%%%%%%%%%%%%%%SIMULATION STARTS HERE%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+for k = 1:nsteps
+    errornow = setPoint(k)-yp(k);
+    reftraj = setPoint(k+P) - errornow*errfac;
+    yfpast = ympast;
+    ufpast = umpast;
+    
     for kk = 1:max(P)
-        ymfree(kk) = numm.*pastU-denm(2:ndenm+1).*pastYf; %changed (2:ndenm+1) to (2:length(denm)+1)
-        pastYf = [ymfree(kk);pastYf(1:length(pastYf)-1)];
-        pastU = [pastU(1);pastU(1:length(pastU)-1)];
+        ymfree(kk) = numm(2:nnumm+1)*ufpast-denm(2:ndenm+1)*yfpast;
+        yfpast = [ymfree(kk);yfpast(1:length(yfpast)-1)];
+        ufpast = [ufpast(1);ufpast(1:length(ufpast)-1)];
     end
-    dutraj = theta\(reftraj-pastYf(P)');
-    uu(k) = dutraj(1) + uuk(k-1); 
+    
+    if k>1
+        dutraj = theta\(reftraj-ymfree(P)');
+        uu(k) = dutraj(1) + uu(k-1);
+    else
+        dutraj = theta\(reftraj-ymfree(P)');
+        uu(k) = dutraj(1) + umpast(1);
+    end
     
     uppast = [uu(k);uppast(1:length(uppast)-1)];
-    yp(k+1) = -denp(2:ndenp+1)*yppast+nump*uppast; %changed (2:ndenp+1) to (2:denp+1)
+    yp(k+1) = -denp(2:ndenp+1)*yppast+nump(2:nnump+1)*uppast;
     yppast = [yp(k+1);yppast(1:length(yppast)-1)];
     
     umpast = [uu(k);umpast(1:length(umpast)-1)];
-    ym(k+1) = -denm(2:ndenm+1)*ympast+numm*umpast; %changed (2:ndenm+1) to (2:denm+1)
+    ym(k+1) = -denm(2:ndenm+1)*ympast+numm(2:nnumm+1)*umpast;
     ympast = [ym(k+1);ympast(1:length(ympast)-1)];
 end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%DISPLAY RESULTS HERE%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+disp('***** Results from simulation : ')
+disp(['Tref = ', num2str(Tref), ', Ts = ', num2str(Ts), ', P = ', int2str(P'), '(steps), M = ', int2str(M)])
+%diffpm = get(plant-model,'num');
+figure
+subplot(211)
+plot(tvec,yp(1:nsteps),'-',tvec,setPoint(1:nsteps),'--');
+grid; title('Plant output (solid) and set point (dashed)')
+xlabel('Time')
+subplot(212)
+stairs(tvec,uu,'-');
+grid; title('Input')
+xlabel('Time')
