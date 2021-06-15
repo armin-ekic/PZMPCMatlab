@@ -6,30 +6,40 @@
 
 Utdi = 47.2;
 
-A = [2.91, -2.822625, 0.9126005; 1, 0, 0; 0, 1, 0];
+A = [2.91,-2.822625,0.9126005; 1,0,0; 0,1,0];
 B = [-3.969/Utdi; 0; 0];
-C = [0, 0, 1];
+C = [0,0,1];
 D = 0;
 
 Q = diag([1000,1000,1000]); %Given Q matrix 
-R = 15; %Given input weightine matrix
 
-% poles = eig(A-H*Ch) %Poles for the system produced by the Kalman filter
+t = [0:0.01:5]';
 
-t = [0:0.01:10]';
+R = 15; %Given input weighting matrix
 
-H = ppl(A',C',[-1,-2,-3,-4])' %Arbitrarily placed poles
+H = lqr(A',C',Q,R)';
 
-Aa = [A,zeros(3,3); H*C, A-H*C]; %Augmented A matrix 
-Ba = [zeros(4,1),B,zeros(4,3); -1,0,1,1,1; zeros(4,1),zeros(4,1),H]
-Ca = [1,0,0,0,0,0,0,0,0; 0,1,0,0,0,0,0,0,0; 0,0,0,0,0,1,0,0,0; 0,0,0,0,0,0,1,0,0]
-Da = [0,1,0,0,0; 0,0,1,0,0; 0,0,0,0,0; 0,0,0,0,0]
+Kx = lqr(A,B,Q,R)
+DC = -C*inv(A-B*Kx)*B
+Kr = 
+
+%%%%This here is what I am unsure on%%%%%%%%%%%%%
+
+%maybe these are the matrices to give us the gains, and the other matrices
+%come later??????? But these are basically whats shown in the book
+
+% Aa = [A,zeros(3,3); H*C, A-H*C] %Augmented A matrix 
+% Ba = [B;B] %Augmented B matrix
+% Ca = diag([1,1,1,1,1,1]) %Augmented C matrix
+% Da = zeros(6,1) %Augmented D Matrix
+A6 = [A,-B*Kx; H*C,A-B*Kx-H*C]
+B6 = [B*Kr;B*Kr]
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-setPoint = 0*t+110; %Arbitrarily set to day values for entire duration
+setPoint = 0*t + 1; %Arbitrarily set to day values for entire duration
 
-X0 = zeros(9,1); %Initial conditions for the system, set to 0
+X0 = zeros(6,1); %Initial conditions for the system, set to 0
 
 y = step3(Aa,Ba,Ca,Da,t,X0,setPoint);
-plot(t,y);
+plot(t,y,t,setPoint,'--');
